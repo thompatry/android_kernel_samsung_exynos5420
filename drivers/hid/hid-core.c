@@ -241,12 +241,6 @@ static int hid_add_field(struct hid_parser *parser, unsigned report_type, unsign
 	offset = report->size;
 	report->size += parser->global.report_size * parser->global.report_count;
 
-	/* Total size check: Allow for possible report index byte */
-	if (report->size > (HID_MAX_BUFFER_SIZE - 1) << 3) {
-		hid_err(parser->device, "report is too long\n");
-		return -1;
-	}
-
 	if (!parser->local.usage_index) /* Ignore padding fields */
 		return 0;
 
@@ -1916,14 +1910,7 @@ static int hid_bus_match(struct device *dev, struct device_driver *drv)
 		!strncmp(hdrv->name, "hid-multitouch", 14))
 		return 1;
 
-	if (!hid_match_device(hdev, hdrv))
-		return 0;
-
-	/* generic wants all that don't have specialized driver */
-	if ((!strncmp(hdrv->name, "generic-", 8) || (!strcmp(hdrv->name, "hid-generic"))) && !hid_ignore_special_drivers)
-		return !hid_match_id(hdev, hid_have_special_driver);
-
-	return 1;
+	return hid_match_device(hdev, hdrv) != NULL;
 }
 
 static int hid_device_probe(struct device *dev)
