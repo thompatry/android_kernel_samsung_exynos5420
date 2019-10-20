@@ -843,43 +843,45 @@ static void *buffer_start_page(struct binder_buffer *buffer)
 	return (void *)((uintptr_t)buffer->data & PAGE_MASK);
 }
 
-static void *prev_buffer_end_page(struct binder_buffer *buffer)
+static void *buffer_end_page(struct binder_buffer *buffer)
 {
-	return (void *)(((uintptr_t)(buffer->data) - 1) & PAGE_MASK);
+	return (void *)(((uintptr_t)(buffer + 1) - 1) & PAGE_MASK);
 }
 
 static void binder_delete_free_buffer(struct binder_proc *proc,
 				      struct binder_buffer *buffer)
 {
 	struct binder_buffer *prev, *next = NULL;
-	bool to_free = true;
+	int free_page_end = 1;
+	int free_page_start = 1;
+
 	BUG_ON(proc->buffers.next == &buffer->entry);
 	prev = binder_buffer_prev(buffer);
 	BUG_ON(!prev->free);
-	if (prev_buffer_end_page(prev) == buffer_start_page(buffer)) {
-		to_free = false;
+	if (buffer_end_page(prev) == buffer_start_page(buffer)) {
+		free_page_start = 0;
+		if (buffer_end_page(prev) == buffer_end_page(buffer))
+			free_page_end = 0;
 		binder_debug(BINDER_DEBUG_BUFFER_ALLOC,
 			     "%d: merge free, buffer %pK share page with %pK\n",
 			      proc->pid, buffer, prev);
 	}
 
 	if (!list_is_last(&buffer->entry, &proc->buffers)) {
-		next = binder_buffer_next(buffer);
+		next = list_entry(buffer->entry.next,
+				  struct binder_buffer, entry);
 		if (buffer_start_page(next) == buffer_start_page(buffer)) {
-			to_free = false;
+			free_page_end = 0;
+			if (buffer_start_page(next) ==
+			    buffer_start_page(buffer))
+				free_page_start = 0;
 			binder_debug(BINDER_DEBUG_BUFFER_ALLOC,
 				     "%d: merge free, buffer %pK share page with %pK\n",
 				      proc->pid, buffer, prev);
 		}
 	}
-
-	if (PAGE_ALIGNED(buffer->data)) {
-		binder_debug(BINDER_DEBUG_BUFFER_ALLOC,
-			     "%d: merge free, buffer start %pK is page aligned\n",
-			     proc->pid, buffer->data);
-		to_free = false;
-	}
-	if (to_free) {
+	list_del(&buffer->entry);
+	if (free_page_start || free_page_end) {
 		binder_debug(BINDER_DEBUG_BUFFER_ALLOC,
 			     "%d: merge free, buffer %pK do not share page%s%s with %pK or %pK\n",
 			     proc->pid, buffer, free_page_start ? "" : " end",
@@ -889,8 +891,6 @@ static void binder_delete_free_buffer(struct binder_proc *proc,
 			(free_page_end ? buffer_end_page(buffer) :
 			buffer_start_page(buffer)) + PAGE_SIZE, NULL);
 	}
-	list_del(&buffer->entry);
-	kfree(buffer);
 }
 
 static void binder_free_buf(struct binder_proc *proc,
