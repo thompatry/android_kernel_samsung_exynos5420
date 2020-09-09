@@ -939,10 +939,7 @@ static void tcp_v6_send_reset(struct sock *sk, struct sk_buff *skb)
 	if (th->rst)
 		return;
 
-	/* If sk not NULL, it means we did a successful lookup and incoming
-	 * route had to be correct. prequeue might have dropped our dst.
-	 */
-	if (!sk && !ipv6_unicast_destination(skb))
+	if (!ipv6_unicast_destination(skb))
 		return;
 
 #ifdef CONFIG_TCP_MD5SIG
@@ -1079,7 +1076,7 @@ static int tcp_v6_conn_request(struct sock *sk, struct sk_buff *skb)
 			goto drop;
 	}
 
-	if (sk_acceptq_is_full(sk))
+	if (sk_acceptq_is_full(sk) && inet_csk_reqsk_queue_young(sk) > 1)
 		goto drop;
 
 	req = inet6_reqsk_alloc(&tcp6_request_sock_ops);
@@ -2165,6 +2162,7 @@ static struct inet_protosw tcpv6_protosw = {
 	.protocol	=	IPPROTO_TCP,
 	.prot		=	&tcpv6_prot,
 	.ops		=	&inet6_stream_ops,
+	.no_check	=	0,
 	.flags		=	INET_PROTOSW_PERMANENT |
 				INET_PROTOSW_ICSK,
 };

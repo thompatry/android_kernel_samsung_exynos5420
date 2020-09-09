@@ -193,7 +193,7 @@ struct sk_buff *__alloc_skb(unsigned int size, gfp_t gfp_mask,
 	size = SKB_DATA_ALIGN(size);
 	size += SKB_DATA_ALIGN(sizeof(struct skb_shared_info));
 	data = kmalloc_node_track_caller(size, gfp_mask, node);
-	if (!data)
+	if (unlikely(ZERO_OR_NULL_PTR(data)))
 		goto nodata;
 	/* kmalloc(size) might give us more room than requested.
 	 * Put skb_shared_info exactly at the end of allocated zone,
@@ -653,10 +653,6 @@ static struct sk_buff *__skb_clone(struct sk_buff *n, struct sk_buff *skb)
 
 	atomic_inc(&(skb_shinfo(skb)->dataref));
 	skb->cloned = 1;
-
-#ifdef CONFIG_IPV6_NDISC_NODETYPE
-	C(ndisc_nodetype);
-#endif
 
 	return n;
 #undef C

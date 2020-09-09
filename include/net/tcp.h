@@ -52,7 +52,7 @@ extern struct inet_hashinfo tcp_hashinfo;
 extern struct percpu_counter tcp_orphan_count;
 extern void tcp_time_wait(struct sock *sk, int state, int timeo);
 
-#define MAX_TCP_HEADER	L1_CACHE_ALIGN(128 + MAX_HEADER)
+#define MAX_TCP_HEADER	(128 + MAX_HEADER)
 #define MAX_TCP_OPTION_SPACE 40
 #define TCP_MIN_SND_MSS		48
 #define TCP_MIN_GSO_SIZE	(TCP_MIN_SND_MSS - MAX_TCP_OPTION_SPACE)
@@ -125,13 +125,19 @@ extern void tcp_time_wait(struct sock *sk, int state, int timeo);
 #endif
 #define TCP_RTO_MAX	((unsigned)(120*HZ))
 #define TCP_RTO_MIN	((unsigned)(HZ/5))
+#if defined(CONFIG_TARGET_LOCALE_CHN)
+#define TCP_TIMEOUT_INIT ((unsigned)(3*HZ))	/* RFC2988bis initial RTO value	*/
+#else
 #define TCP_TIMEOUT_INIT ((unsigned)(1*HZ))	/* RFC2988bis initial RTO value	*/
+#endif
 #define TCP_TIMEOUT_FALLBACK ((unsigned)(3*HZ))	/* RFC 1122 initial RTO value, now
 						 * used as a fallback RTO for the
 						 * initial data transmission if no
 						 * valid RTT sample has been acquired,
 						 * most likely due to retrans in 3WHS.
 						 */
+
+#define TCP_DELACK_SEG          1       /*Number of full MSS to receive before Acking RFC2581*/
 
 #define TCP_RESOURCE_PROBE_INTERVAL ((unsigned)(HZ/2U)) /* Maximal interval between probes
 					                 * for local resources.
@@ -256,10 +262,15 @@ extern int sysctl_tcp_cookie_size;
 extern int sysctl_tcp_thin_linear_timeouts;
 extern int sysctl_tcp_thin_dupack;
 extern int sysctl_tcp_default_init_rwnd;
+
+/* sysctl variables for controlling various tcp parameters */
+extern int sysctl_tcp_delack_seg;
+extern int sysctl_tcp_use_userconfig;
+extern int sysctl_tcp_challenge_ack_limit;
+
 extern atomic_long_t tcp_memory_allocated;
 extern struct percpu_counter tcp_sockets_allocated;
 extern int tcp_memory_pressure;
-extern int sysctl_tcp_challenge_ack_limit;
 
 /*
  * The next routines deal with comparing 32 bit unsigned ints
@@ -350,6 +361,10 @@ extern ssize_t tcp_splice_read(struct socket *sk, loff_t *ppos,
 			       struct pipe_inode_info *pipe, size_t len,
 			       unsigned int flags);
 
+extern int tcp_use_userconfig_sysctl_handler(struct ctl_table *, int,
+                                         void __user *, size_t *, loff_t *);
+extern int tcp_proc_delayed_ack_control(struct ctl_table *, int,
+                void __user *, size_t *, loff_t *);
 static inline void tcp_dec_quickack_mode(struct sock *sk,
 					 const unsigned int pkts)
 {
@@ -1237,10 +1252,7 @@ extern int tcp_md5_hash_skb_data(struct tcp_md5sig_pool *, const struct sk_buff 
 extern int tcp_md5_hash_key(struct tcp_md5sig_pool *hp,
 			    const struct tcp_md5sig_key *key);
 
-static inline void tcp_init_send_head(struct sock *sk)
-{
-	sk->sk_send_head = NULL;
-}
+static inline void tcp_init_send_head(struct sock *sk);
 
 /* write queue abstraction */
 static inline void tcp_write_queue_purge(struct sock *sk)
@@ -1312,25 +1324,9 @@ static inline void tcp_check_send_head(struct sock *sk, struct sk_buff *skb_unli
 		tcp_sk(sk)->highest_sack = NULL;
 }
 
-static inline struct sk_buff *tcp_rtx_queue_head(const struct sock *sk)
+static inline void tcp_init_send_head(struct sock *sk)
 {
-	struct sk_buff *skb = tcp_write_queue_head(sk);
-
-	if (skb == tcp_send_head(sk))
-		skb = NULL;
-
-	return skb;
-}
-
-static inline struct sk_buff *tcp_rtx_queue_tail(const struct sock *sk)
-{
-	struct sk_buff *skb = tcp_send_head(sk);
-
-	/* empty retransmit queue, for example due to zero window */
-	if (skb == tcp_write_queue_head(sk))
-		return NULL;
-
-	return skb ? tcp_write_queue_prev(sk, skb) : tcp_write_queue_tail(sk);
+	sk->sk_send_head = NULL;
 }
 
 static inline void __tcp_add_write_queue_tail(struct sock *sk, struct sk_buff *skb)

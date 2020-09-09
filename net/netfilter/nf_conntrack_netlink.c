@@ -1250,6 +1250,11 @@ ctnetlink_change_timeout(struct nf_conn *ct, const struct nlattr * const cda[])
 	ct->timeout.expires = jiffies + timeout * HZ;
 	add_timer(&ct->timeout);
 
+/* Refresh the NAT type entry. */
+#if defined(CONFIG_IP_NF_TARGET_NATTYPE_MODULE)
+	(void)nattype_refresh_timer(ct->nattype_entry, ct->timeout.expires);
+#endif
+
 	return 0;
 }
 
@@ -2544,9 +2549,6 @@ static void __net_exit ctnetlink_net_exit_batch(struct list_head *net_exit_list)
 
 	list_for_each_entry(net, net_exit_list, exit_list)
 		ctnetlink_net_exit(net);
-
-	/* wait for other cpus until they are done with ctnl_notifiers */
-	synchronize_rcu();
 }
 
 static struct pernet_operations ctnetlink_net_ops = {

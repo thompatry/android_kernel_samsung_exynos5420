@@ -46,6 +46,7 @@
  *    Add codes to share UID/PID information
  *
  */
+ 
 
 #ifndef _SOCK_H
 #define _SOCK_H
@@ -172,6 +173,7 @@ struct sock_common {
 	volatile unsigned char	skc_state;
 	unsigned char		skc_reuse;
 	int			skc_bound_dev_if;
+	int			padding[2];
 	union {
 		struct hlist_node	skc_bind_node;
 		struct hlist_nulls_node skc_portaddr_node;
@@ -221,8 +223,7 @@ struct cg_proto;
   *	@sk_sndbuf: size of send buffer in bytes
   *	@sk_flags: %SO_LINGER (l_onoff), %SO_BROADCAST, %SO_KEEPALIVE,
   *		   %SO_OOBINLINE settings, %SO_TIMESTAMPING settings
-  *	@sk_no_check_tx: %SO_NO_CHECK setting, set checksum in TX packets
-  *	@sk_no_check_rx: allow zero checksum in RX packets
+  *	@sk_no_check: %SO_NO_CHECK setting, wether or not checkup packets
   *	@sk_route_caps: route capabilities (e.g. %NETIF_F_TSO)
   *	@sk_route_nocaps: forbidden route capabilities (e.g NETIF_F_GSO_MASK)
   *	@sk_gso_type: GSO type (e.g. %SKB_GSO_TCPV4)
@@ -336,8 +337,7 @@ struct sock {
 	struct sk_buff_head	sk_write_queue;
 	kmemcheck_bitfield_begin(flags);
 	unsigned int		sk_shutdown  : 2,
-				sk_no_check_tx : 1,
-				sk_no_check_rx : 1,
+				sk_no_check  : 2,
 				sk_userlocks : 4,
 				sk_protocol  : 8,
 				sk_type      : 16;
@@ -383,8 +383,6 @@ struct sock {
 	__u32			sk_mark;
 	u32			sk_classid;
 	struct cg_proto		*sk_cgrp;
-	uid_t			knox_uid;
-	pid_t			knox_pid;
 	void			(*sk_state_change)(struct sock *sk);
 	void			(*sk_data_ready)(struct sock *sk, int bytes);
 	void			(*sk_write_space)(struct sock *sk);
@@ -393,11 +391,6 @@ struct sock {
 						  struct sk_buff *skb);  
 	void                    (*sk_destruct)(struct sock *sk);
 };
-
-#define __sk_user_data(sk) ((*((void __rcu **)&(sk)->sk_user_data)))
-
-#define rcu_dereference_sk_user_data(sk)	rcu_dereference(__sk_user_data((sk)))
-#define rcu_assign_sk_user_data(sk, ptr)	rcu_assign_pointer(__sk_user_data((sk)), ptr)
 
 static inline int sk_peek_offset(struct sock *sk, int flags)
 {
@@ -1158,7 +1151,7 @@ static inline void sk_sockets_allocated_inc(struct sock *sk)
 	percpu_counter_inc(prot->sockets_allocated);
 }
 
-static inline u64
+static inline int
 sk_sockets_allocated_read_positive(struct sock *sk)
 {
 	struct proto *prot = sk->sk_prot;
@@ -1597,6 +1590,7 @@ static inline int sk_tx_queue_get(const struct sock *sk)
 
 static inline void sk_set_socket(struct sock *sk, struct socket *sock)
 {
+	sk_tx_queue_clear(sk);
 	sk->sk_socket = sock;
 }
 
@@ -1648,8 +1642,8 @@ sk_dst_get(struct sock *sk)
 
 	rcu_read_lock();
 	dst = rcu_dereference(sk->sk_dst_cache);
-	if (dst && !atomic_inc_not_zero(&dst->__refcnt))
-		dst = NULL;
+	if (dst)
+		dst_hold(dst);
 	rcu_read_unlock();
 	return dst;
 }
@@ -2187,5 +2181,16 @@ extern int sysctl_optmem_max;
 
 extern __u32 sysctl_wmem_default;
 extern __u32 sysctl_rmem_default;
+
+/* SOCKEV Notifier Events */
+#define SOCKEV_SOCKET   0x00
+#define SOCKEV_BIND     0x01
+#define SOCKEV_LISTEN   0x02
+#define SOCKEV_ACCEPT   0x03
+#define SOCKEV_CONNECT  0x04
+#define SOCKEV_SHUTDOWN 0x05
+
+int sockev_register_notify(struct notifier_block *nb);
+int sockev_unregister_notify(struct notifier_block *nb);
 
 #endif	/* _SOCK_H */

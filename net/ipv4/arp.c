@@ -734,7 +734,6 @@ static int arp_process(struct sk_buff *skb)
 	int addr_type;
 	struct neighbour *n;
 	struct net *net = dev_net(dev);
-	bool is_garp = false;
 
 	/* arp_rcv below verifies the ARP header and verifies the device
 	 * is ARP'able.
@@ -894,12 +893,10 @@ static int arp_process(struct sk_buff *skb)
 		   It is possible, that this option should be enabled for some
 		   devices (strip is candidate)
 		 */
-		is_garp = arp->ar_op == htons(ARPOP_REQUEST) && tip == sip &&
-			  inet_addr_type(net, sip) == RTN_UNICAST;
-
 		if (n == NULL &&
-		    ((arp->ar_op == htons(ARPOP_REPLY)  &&
-		      inet_addr_type(net, sip) == RTN_UNICAST) || is_garp))
+		    (arp->ar_op == htons(ARPOP_REPLY) ||
+		     (arp->ar_op == htons(ARPOP_REQUEST) && tip == sip)) &&
+		    inet_addr_type(net, sip) == RTN_UNICAST)
 			n = __neigh_lookup(&arp_tbl, &sip, dev, 1);
 	}
 
@@ -912,10 +909,7 @@ static int arp_process(struct sk_buff *skb)
 		   agents are active. Taking the first reply prevents
 		   arp trashing and chooses the fastest router.
 		 */
-		override = time_after(jiffies,
-				      n->updated +
-				      n->parms->locktime) ||
-			   is_garp;
+		override = time_after(jiffies, n->updated + n->parms->locktime);
 
 		/* Broadcast replies and request packets
 		   do not assert neighbour reachability.

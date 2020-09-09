@@ -220,7 +220,7 @@ static inline void TCP_ECN_accept_cwr(struct tcp_sock *tp, const struct sk_buff 
 
 static inline void TCP_ECN_withdraw_cwr(struct tcp_sock *tp)
 {
-	tp->ecn_flags &= ~TCP_ECN_QUEUE_CWR;
+	tp->ecn_flags &= ~TCP_ECN_DEMAND_CWR;
 }
 
 static inline void TCP_ECN_check_ce(struct tcp_sock *tp, const struct sk_buff *skb)
@@ -324,12 +324,11 @@ static int __tcp_grow_window(const struct sock *sk, const struct sk_buff *skb)
 static void tcp_grow_window(struct sock *sk, const struct sk_buff *skb)
 {
 	struct tcp_sock *tp = tcp_sk(sk);
-	int room;
-
-	room = min_t(int, tp->window_clamp, tcp_space(sk)) - tp->rcv_ssthresh;
 
 	/* Check #1 */
-	if (room > 0 && !sk_under_memory_pressure(sk)) {
+	if (tp->rcv_ssthresh < tp->window_clamp &&
+	    (int)tp->rcv_ssthresh < tcp_space(sk) &&
+	    !sk_under_memory_pressure(sk)) {
 		int incr;
 
 		/* Check #2. Increase window, if skb with such overhead
@@ -342,7 +341,8 @@ static void tcp_grow_window(struct sock *sk, const struct sk_buff *skb)
 
 		if (incr) {
 			incr = max_t(int, incr, 2 * skb->len);
-			tp->rcv_ssthresh += min(room, incr);
+			tp->rcv_ssthresh = min(tp->rcv_ssthresh + incr,
+					       tp->window_clamp);
 			inet_csk(sk)->icsk_ack.quick |= 1;
 		}
 	}
@@ -743,12 +743,12 @@ void tcp_update_metrics(struct sock *sk)
 	if (sysctl_tcp_nometrics_save)
 		return;
 
+	dst_confirm(dst);
+
 	if (dst && (dst->flags & DST_HOST)) {
 		const struct inet_connection_sock *icsk = inet_csk(sk);
 		int m;
 		unsigned long rtt;
-
-		dst_confirm(dst);
 
 		if (icsk->icsk_backoff || !tp->srtt) {
 			/* This session failed to estimate rtt. Why?
@@ -998,10 +998,9 @@ static void tcp_update_reordering(struct sock *sk, const int metric,
 /* This must be called before lost_out is incremented */
 static void tcp_verify_retransmit_hint(struct tcp_sock *tp, struct sk_buff *skb)
 {
-	if (((tp->retransmit_skb_hint == NULL) && tp->retrans_out >= tp->lost_out) ||
-	    (tp->retransmit_skb_hint &&
-	     before(TCP_SKB_CB(skb)->seq,
-		    TCP_SKB_CB(tp->retransmit_skb_hint)->seq)))
+	if ((tp->retransmit_skb_hint == NULL) ||
+	    before(TCP_SKB_CB(skb)->seq,
+		   TCP_SKB_CB(tp->retransmit_skb_hint)->seq))
 		tp->retransmit_skb_hint = skb;
 
 	if (!tp->lost_out ||
@@ -3877,11 +3876,9 @@ static int tcp_ack(struct sock *sk, const struct sk_buff *skb, int flag)
 			tcp_cong_avoid(sk, ack, prior_in_flight);
 	}
 
-	if ((flag & FLAG_FORWARD_PROGRESS) || !(flag & FLAG_NOT_DUP)) {
-		struct dst_entry *dst = __sk_dst_get(sk);
-		if (dst)
-			dst_confirm(dst);
-	}
+	if ((flag & FLAG_FORWARD_PROGRESS) || !(flag & FLAG_NOT_DUP))
+		dst_confirm(__sk_dst_get(sk));
+
 	return 1;
 
 no_queue:
@@ -4563,9 +4560,7 @@ static void tcp_data_queue_ofo(struct sock *sk, struct sk_buff *skb)
 		 * to avoid future tcp_collapse_ofo_queue(),
 		 * probably the most expensive function in tcp stack.
 		 */
-		if (skb->len <= skb_tailroom(skb1) &&
-		    !tcp_hdr(skb)->fin &&
-		    !skb_cloned(skb1)) {
+		if (skb->len <= skb_tailroom(skb1) && !tcp_hdr(skb)->fin) {
 			NET_INC_STATS_BH(sock_net(sk),
 					 LINUX_MIB_TCPRCVCOALESCE);
 			BUG_ON(skb_copy_bits(skb, 0,
@@ -4903,7 +4898,6 @@ restart:
 static void tcp_collapse_ofo_queue(struct sock *sk)
 {
 	struct tcp_sock *tp = tcp_sk(sk);
-	u32 range_truesize, sum_tiny = 0;
 	struct sk_buff *skb = skb_peek(&tp->out_of_order_queue);
 	struct sk_buff *head;
 	u32 start, end;
@@ -4913,7 +4907,6 @@ static void tcp_collapse_ofo_queue(struct sock *sk)
 
 	start = TCP_SKB_CB(skb)->seq;
 	end = TCP_SKB_CB(skb)->end_seq;
-	range_truesize = skb->truesize;
 	head = skb;
 
 	for (;;) {
@@ -4928,24 +4921,14 @@ static void tcp_collapse_ofo_queue(struct sock *sk)
 		if (!skb ||
 		    after(TCP_SKB_CB(skb)->seq, end) ||
 		    before(TCP_SKB_CB(skb)->end_seq, start)) {
-			/* Do not attempt collapsing tiny skbs */
-			if (range_truesize != head->truesize ||
-			    end - start >= SKB_WITH_OVERHEAD(SK_MEM_QUANTUM)) {
-				tcp_collapse(sk, &tp->out_of_order_queue,
-					     head, skb, start, end);
-			} else {
-				sum_tiny += range_truesize;
-				if (sum_tiny > sk->sk_rcvbuf >> 3)
-					return;
-			}
-
+			tcp_collapse(sk, &tp->out_of_order_queue,
+				     head, skb, start, end);
 			head = skb;
 			if (!skb)
 				break;
 			/* Start new segment */
 			start = TCP_SKB_CB(skb)->seq;
 			end = TCP_SKB_CB(skb)->end_seq;
-			range_truesize = skb->truesize;
 		} else {
 			if (before(TCP_SKB_CB(skb)->seq, start))
 				start = TCP_SKB_CB(skb)->seq;
@@ -5000,9 +4983,6 @@ static int tcp_prune_queue(struct sock *sk)
 		tcp_clamp_window(sk);
 	else if (sk_under_memory_pressure(sk))
 		tp->rcv_ssthresh = min(tp->rcv_ssthresh, 4U * tp->advmss);
-
-	if (atomic_read(&sk->sk_rmem_alloc) <= sk->sk_rcvbuf)
-		return 0;
 
 	tcp_collapse_ofo_queue(sk);
 	if (!skb_queue_empty(&sk->sk_receive_queue))
@@ -5131,7 +5111,8 @@ static void __tcp_ack_snd_check(struct sock *sk, int ofo_possible)
 	struct tcp_sock *tp = tcp_sk(sk);
 
 	    /* More than one full frame received... */
-	if (((tp->rcv_nxt - tp->rcv_wup) > inet_csk(sk)->icsk_ack.rcv_mss &&
+	if (((tp->rcv_nxt - tp->rcv_wup) > (inet_csk(sk)->icsk_ack.rcv_mss) *
+					sysctl_tcp_delack_seg &&
 	     /* ... and right edge of window advances far enough.
 	      * (tcp_recvmsg() will send ACK otherwise). Or...
 	      */
@@ -6053,14 +6034,9 @@ int tcp_rcv_state_process(struct sock *sk, struct sk_buff *skb,
 
 		case TCP_FIN_WAIT1:
 			if (tp->snd_una == tp->write_seq) {
-				struct dst_entry *dst;
-
 				tcp_set_state(sk, TCP_FIN_WAIT2);
 				sk->sk_shutdown |= SEND_SHUTDOWN;
-
-				dst = __sk_dst_get(sk);
-				if (dst)
-					dst_confirm(dst);
+				dst_confirm(__sk_dst_get(sk));
 
 				if (!sock_flag(sk, SOCK_DEAD))
 					/* Wake up lingering close() */

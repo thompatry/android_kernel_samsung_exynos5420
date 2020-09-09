@@ -166,7 +166,7 @@ struct ip_reply_arg {
 	int	    flags;
 	__wsum 	    csum;
 	int	    csumoffset; /* u16 offset of csum in iov[0].iov_base */
-						/* -1 if not needed */ 
+				/* -1 if not needed */ 
 	int	    bound_dev_if;
 	u8  	    tos;
 }; 

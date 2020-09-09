@@ -207,7 +207,7 @@ static inline int ip_finish_output2(struct sk_buff *skb)
 	rcu_read_lock();
 	neigh = dst_get_neighbour_noref(dst);
 	if (neigh) {
-		int res = dst_neigh_output(dst, neigh, skb);
+		int res = neigh_output(neigh, skb);
 
 		rcu_read_unlock();
 		return res;
@@ -427,7 +427,6 @@ static void ip_copy_metadata(struct sk_buff *to, struct sk_buff *from)
 	to->pkt_type = from->pkt_type;
 	to->priority = from->priority;
 	to->protocol = from->protocol;
-	to->skb_iif = from->skb_iif;
 	skb_dst_drop(to);
 	skb_dst_copy(to, from);
 	to->dev = from->dev;
@@ -849,11 +848,11 @@ static int __ip_append_data(struct sock *sk,
 
 	cork->length += length;
 	if ((skb && skb_has_frags(skb)) ||
-	    (((length + (skb ? skb->len : fragheaderlen)) > mtu) &&
+	    ((length > mtu) &&
 	    (skb_queue_len(queue) <= 1) &&
 	    (sk->sk_protocol == IPPROTO_UDP) &&
 	    (rt->dst.dev->features & NETIF_F_UFO) && !dst_xfrm(&rt->dst) &&
-	    (sk->sk_type == SOCK_DGRAM) && !sk->sk_no_check_tx)) {
+	    (sk->sk_type == SOCK_DGRAM))) {
 		err = ip_ufo_append_data(sk, queue, getfrag, from, length,
 					 hh_len, fragheaderlen, transhdrlen,
 					 maxfraglen, flags);

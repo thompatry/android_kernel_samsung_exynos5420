@@ -1,3 +1,4 @@
+/* Copyright (c) 2015 Samsung Electronics Co., Ltd. */
 /*
  * INET		An implementation of the TCP/IP protocol suite for the LINUX
  *		operating system.  INET is implemented using the  BSD Socket
@@ -88,7 +89,15 @@
  *		as published by the Free Software Foundation; either version
  *		2 of the License, or (at your option) any later version.
  */
-
+/*
+ *  Changes:
+ *  KwnagHyun Kim <kh0304.kim@samsung.com> 2015/07/08
+ *  Baesung Park  <baesung.park@samsung.com> 2015/07/08
+ *  Vignesh Saravanaperumal <vignesh1.s@samsung.com> 2015/07/08
+ *    Add codes to share UID/PID information
+ *
+ */
+ 
 #include <linux/capability.h>
 #include <linux/errno.h>
 #include <linux/types.h>
@@ -113,6 +122,7 @@
 #include <linux/user_namespace.h>
 #include <linux/static_key.h>
 #include <linux/memcontrol.h>
+#include <linux/prefetch.h>
 
 #include <asm/uaccess.h>
 
@@ -644,7 +654,7 @@ set_rcvbuf:
 		break;
 
 	case SO_NO_CHECK:
-		sk->sk_no_check_tx = valbool;
+		sk->sk_no_check = valbool;
 		break;
 
 	case SO_PRIORITY:
@@ -894,7 +904,7 @@ int sock_getsockopt(struct socket *sock, int level, int optname,
 		break;
 
 	case SO_NO_CHECK:
-		v.val = sk->sk_no_check_tx;
+		v.val = sk->sk_no_check;
 		break;
 
 	case SO_PRIORITY:
@@ -1108,8 +1118,9 @@ static struct sock *sk_prot_alloc(struct proto *prot, gfp_t priority,
 	slab = prot->slab;
 	if (slab != NULL) {
 		sk = kmem_cache_alloc(slab, priority & ~__GFP_ZERO);
-		if (!sk)
+		if (!sk) {
 			return sk;
+		}
 		if (priority & __GFP_ZERO) {
 			if (prot->clear_sk)
 				prot->clear_sk(sk, prot->obj_size);
@@ -1128,11 +1139,6 @@ static struct sock *sk_prot_alloc(struct proto *prot, gfp_t priority,
 		if (!try_module_get(prot->owner))
 			goto out_free_sec;
 		sk_tx_queue_clear(sk);
-
-// ------------- START of KNOX_VPN ------------------//
-        sk->knox_uid = current->cred->uid;
-        sk->knox_pid = current->tgid;
-// ------------- END of KNOX_VPN -------------------//
 	}
 
 	return sk;
@@ -1212,7 +1218,7 @@ struct sock *sk_alloc(struct net *net, int family, gfp_t priority,
 
 		sock_update_classid(sk);
 		sock_update_netprioidx(sk);
-		sk_tx_queue_clear(sk);
+
 	}
 
 	return sk;
@@ -1374,7 +1380,6 @@ struct sock *sk_clone_lock(const struct sock *sk, const gfp_t priority)
 		 */
 		sk_refcnt_debug_inc(newsk);
 		sk_set_socket(newsk, NULL);
-		sk_tx_queue_clear(newsk);
 		newsk->sk_wq = NULL;
 
 		sk_update_clone(sk, newsk);
@@ -1707,6 +1712,7 @@ static void __release_sock(struct sock *sk)
 
 		do {
 			struct sk_buff *next = skb->next;
+			prefetch(next);
 
 			WARN_ON_ONCE(skb_dst_is_noref(skb));
 			skb->next = NULL;
@@ -1810,7 +1816,7 @@ int __sk_mem_schedule(struct sock *sk, int size, int kind)
 	}
 
 	if (sk_has_memory_pressure(sk)) {
-		u64 alloc;
+		int alloc;
 
 		if (!sk_under_memory_pressure(sk))
 			return 1;

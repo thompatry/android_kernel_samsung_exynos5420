@@ -138,7 +138,7 @@ static int ip6_finish_output2(struct sk_buff *skb)
 	rcu_read_lock();
 	neigh = dst_get_neighbour_noref(dst);
 	if (neigh) {
-		int res = dst_neigh_output(dst, neigh, skb);
+		int res = neigh_output(neigh, skb);
 
 		rcu_read_unlock();
 		return res;
@@ -440,8 +440,9 @@ int ip6_forward(struct sk_buff *skb)
 	}
 
 	/* XXX: idev->cnf.proxy_ndp? */
-	if (net->ipv6.devconf_all->proxy_ndp &&
-	    pneigh_lookup(&nd_tbl, net, &hdr->daddr, skb->dev, 0)) {
+	if ((net->ipv6.devconf_all->proxy_ndp == 1 &&
+	    pneigh_lookup(&nd_tbl, net, &hdr->daddr, skb->dev, 0))
+	    || net->ipv6.devconf_all->proxy_ndp >= 2) {
 		int proxied = ip6_forward_proxy_check(skb);
 		if (proxied > 0)
 			return ip6_input(skb);
@@ -1217,7 +1218,7 @@ int ip6_append_data(struct sock *sk, int getfrag(void *from, char *to,
 	struct ipv6_pinfo *np = inet6_sk(sk);
 	struct inet_cork *cork;
 	struct sk_buff *skb, *skb_prev = NULL;
-	unsigned int maxfraglen, fragheaderlen, mtu, orig_mtu, headersize;
+	unsigned int maxfraglen, fragheaderlen, mtu, orig_mtu;
 	int exthdrlen;
 	int dst_exthdrlen;
 	int hh_len;
@@ -1275,16 +1276,14 @@ int ip6_append_data(struct sock *sk, int getfrag(void *from, char *to,
 		np->cork.tclass = tclass;
 		if (rt->dst.flags & DST_XFRM_TUNNEL)
 			mtu = np->pmtudisc == IPV6_PMTUDISC_PROBE ?
-			      ACCESS_ONCE(rt->dst.dev->mtu) : dst_mtu(&rt->dst);
+			      rt->dst.dev->mtu : dst_mtu(&rt->dst);
 		else
 			mtu = np->pmtudisc == IPV6_PMTUDISC_PROBE ?
-			      ACCESS_ONCE(rt->dst.dev->mtu) : dst_mtu(rt->dst.path);
+			      rt->dst.dev->mtu : dst_mtu(rt->dst.path);
 		if (np->frag_size < mtu) {
 			if (np->frag_size)
 				mtu = np->frag_size;
 		}
-		if (mtu < IPV6_MIN_MTU)
-			return -EINVAL;
 		cork->fragsize = mtu;
 		if (dst_allfrag(rt->dst.path))
 			cork->flags |= IPCORK_ALLFRAG;
@@ -1310,34 +1309,11 @@ int ip6_append_data(struct sock *sk, int getfrag(void *from, char *to,
 
 	fragheaderlen = sizeof(struct ipv6hdr) + rt->rt6i_nfheader_len +
 			(opt ? opt->opt_nflen : 0);
-	maxfraglen = ((mtu - fragheaderlen) & ~7) + fragheaderlen -
-		     sizeof(struct frag_hdr);
-	headersize = sizeof(struct ipv6hdr) +
-		     (opt ? opt->opt_flen + opt->opt_nflen : 0) +
-		     (dst_allfrag(&rt->dst) ?
-		      sizeof(struct frag_hdr) : 0) +
-		     rt->rt6i_nfheader_len;
+	maxfraglen = ((mtu - fragheaderlen) & ~7) + fragheaderlen - sizeof(struct frag_hdr);
 
 	if (mtu <= sizeof(struct ipv6hdr) + IPV6_MAXPLEN) {
-		unsigned int maxnonfragsize;
-
-		maxnonfragsize = (np->pmtudisc >= IPV6_PMTUDISC_DO) ?
-				 mtu : sizeof(struct ipv6hdr) + IPV6_MAXPLEN;
-
-		/* dontfrag active */
-		if ((cork->length + length > mtu - headersize) && dontfrag &&
-		    (sk->sk_protocol == IPPROTO_UDP ||
-		     sk->sk_protocol == IPPROTO_RAW)) {
-			ipv6_local_rxpmtu(sk, fl6, mtu - headersize +
-						   sizeof(struct ipv6hdr));
-			goto emsgsize;
-		}
-
-		if (cork->length + length > maxnonfragsize - headersize) {
-emsgsize:
-			ipv6_local_error(sk, EMSGSIZE, fl6,
-					 mtu - headersize +
-					 sizeof(struct ipv6hdr));
+		if (cork->length + length > sizeof(struct ipv6hdr) + IPV6_MAXPLEN - fragheaderlen) {
+			ipv6_local_error(sk, EMSGSIZE, fl6, mtu-exthdrlen);
 			return -EMSGSIZE;
 		}
 	}
@@ -1365,13 +1341,19 @@ emsgsize:
 	 * --yoshfuji
 	 */
 
+	if ((length > mtu) && dontfrag && (sk->sk_protocol == IPPROTO_UDP ||
+					   sk->sk_protocol == IPPROTO_RAW)) {
+		ipv6_local_rxpmtu(sk, fl6, mtu-exthdrlen);
+		return -EMSGSIZE;
+	}
+
 	skb = skb_peek_tail(&sk->sk_write_queue);
 	cork->length += length;
 	if ((skb && skb_has_frags(skb)) ||
-	    (((length + (skb ? skb->len : headersize)) > mtu) &&
+	    (((length + fragheaderlen) > mtu) &&
 	    (skb_queue_len(&sk->sk_write_queue) <= 1) &&
 	    (sk->sk_protocol == IPPROTO_UDP) &&
-	    (rt->dst.dev->features & NETIF_F_UFO) &&
+	    (rt->dst.dev->features & NETIF_F_UFO) && !dst_xfrm(&rt->dst) &&
 	    (sk->sk_type == SOCK_DGRAM))) {
 		err = ip6_ufo_append_data(sk, getfrag, from, length,
 					  hh_len, fragheaderlen,

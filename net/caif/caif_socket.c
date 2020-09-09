@@ -760,6 +760,10 @@ static int caif_connect(struct socket *sock, struct sockaddr *uaddr,
 
 	lock_sock(sk);
 
+	err = -EINVAL;
+	if (addr_len < offsetofend(struct sockaddr, sa_family))
+		goto out;
+
 	err = -EAFNOSUPPORT;
 	if (uaddr->sa_family != AF_CAIF)
 		goto out;
@@ -1020,7 +1024,7 @@ static void caif_sock_destructor(struct sock *sk)
 	caif_assert(sk_unhashed(sk));
 	caif_assert(!sk->sk_socket);
 	if (!sock_flag(sk, SOCK_DEAD)) {
-		pr_debug("Attempt to release alive CAIF socket: %p\n", sk);
+		WARN(1, "Attempt to release alive CAIF socket: %p\n", sk);
 		return;
 	}
 	sk_stream_kill_queues(&cf_sk->sk);

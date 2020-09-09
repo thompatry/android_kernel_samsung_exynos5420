@@ -2481,7 +2481,7 @@ static void skb_update_prio(struct sk_buff *skb)
 #endif
 
 static DEFINE_PER_CPU(int, xmit_recursion);
-#define RECURSION_LIMIT 8
+#define RECURSION_LIMIT 10
 
 /**
  *	dev_queue_xmit - transmit a buffer
@@ -4136,6 +4136,15 @@ static void dev_seq_printf_stats(struct seq_file *seq, struct net_device *dev)
 		   stats->tx_compressed);
 }
 
+static void dev_seq_printf_stats_packet(struct seq_file *seq, struct net_device *dev)
+{
+	struct rtnl_link_stats64 temp2;
+	const struct rtnl_link_stats64 *stats2 = dev_get_stats(dev, &temp2);
+
+	seq_printf(seq, "%6s: %llu %llu\n",
+		   dev->name, stats2->rx_bytes, stats2->tx_bytes);
+}
+
 /*
  *	Called from the PROCfs module. This now uses the new arbitrary sized
  *	/proc/net interface to create /proc/net/dev
@@ -4150,6 +4159,13 @@ static int dev_seq_show(struct seq_file *seq, void *v)
 			      "drop fifo colls carrier compressed\n");
 	else
 		dev_seq_printf_stats(seq, v);
+	return 0;
+}
+
+static int dev_seq_show_packet(struct seq_file *seq, void *v)
+{
+	if (v != SEQ_START_TOKEN)
+		dev_seq_printf_stats_packet(seq, v);
 	return 0;
 }
 
@@ -4199,15 +4215,36 @@ static const struct seq_operations dev_seq_ops = {
 	.show  = dev_seq_show,
 };
 
+static const struct seq_operations dev_seq_ops_packet = {
+	.start = dev_seq_start,
+	.next  = dev_seq_next,
+	.stop  = dev_seq_stop,
+	.show  = dev_seq_show_packet,
+};
+
 static int dev_seq_open(struct inode *inode, struct file *file)
 {
 	return seq_open_net(inode, file, &dev_seq_ops,
 			    sizeof(struct seq_net_private));
 }
 
+static int dev_seq_open1(struct inode *inode, struct file *file)
+{
+	return seq_open_net(inode, file, &dev_seq_ops_packet,
+			    sizeof(struct seq_net_private));
+}
+
 static const struct file_operations dev_seq_fops = {
 	.owner	 = THIS_MODULE,
 	.open    = dev_seq_open,
+	.read    = seq_read,
+	.llseek  = seq_lseek,
+	.release = seq_release_net,
+};
+
+static const struct file_operations dev_seq1_fops = {
+	.owner	 = THIS_MODULE,
+	.open    = dev_seq_open1,
 	.read    = seq_read,
 	.llseek  = seq_lseek,
 	.release = seq_release_net,
@@ -4343,6 +4380,8 @@ static int __net_init dev_proc_net_init(struct net *net)
 	int rc = -ENOMEM;
 
 	if (!proc_net_fops_create(net, "dev", S_IRUGO, &dev_seq_fops))
+		goto out;
+	if (!proc_net_fops_create(net, "packet_data", S_IRUGO, &dev_seq1_fops))
 		goto out;
 	if (!proc_net_fops_create(net, "softnet_stat", S_IRUGO, &softnet_seq_fops))
 		goto out_dev;
@@ -5592,16 +5631,7 @@ int register_netdevice(struct net_device *dev)
 	ret = notifier_to_errno(ret);
 	if (ret) {
 		rollback_registered(dev);
-		rcu_barrier();
-
 		dev->reg_state = NETREG_UNREGISTERED;
-		/* We should put the kobject that hold in
-		 * netdev_unregister_kobject(), otherwise
-		 * the net device cannot be freed when
-		 * driver calls free_netdev(), because the
-		 * kobject is being hold.
-		 */
-		kobject_put(&dev->dev.kobj);
 	}
 	/*
 	 *	Prevent userspace races by waiting until the network
@@ -5746,7 +5776,7 @@ static void netdev_wait_allrefs(struct net_device *dev)
 
 		refcnt = netdev_refcnt_read(dev);
 
-		if (refcnt && time_after(jiffies, warning_time + 10 * HZ)) {
+		if (time_after(jiffies, warning_time + 10 * HZ)) {
 			pr_emerg("unregister_netdevice: waiting for %s to become free. Usage count = %d\n",
 				 dev->name, refcnt);
 			warning_time = jiffies;
@@ -6265,10 +6295,20 @@ static int dev_cpu_callback(struct notifier_block *nfb,
 		oldsd->output_queue = NULL;
 		oldsd->output_queue_tailp = &oldsd->output_queue;
 	}
-	/* Append NAPI poll list from offline CPU. */
-	if (!list_empty(&oldsd->poll_list)) {
-		list_splice_init(&oldsd->poll_list, &sd->poll_list);
-		raise_softirq_irqoff(NET_RX_SOFTIRQ);
+	/* Append NAPI poll list from offline CPU, with one exception :
+	 * process_backlog() must be called by cpu owning percpu backlog.
+	 * We properly handle process_queue & input_pkt_queue later.
+	 */
+	while (!list_empty(&oldsd->poll_list)) {
+		struct napi_struct *napi = list_first_entry(&oldsd->poll_list,
+							struct napi_struct,
+							poll_list);
+
+		list_del_init(&napi->poll_list);
+		if (napi->poll == process_backlog)
+			napi->state = 0;
+		else
+			____napi_schedule(sd, napi);
 	}
 
 	raise_softirq_irqoff(NET_TX_SOFTIRQ);
@@ -6279,7 +6319,7 @@ static int dev_cpu_callback(struct notifier_block *nfb,
 		netif_rx(skb);
 		input_queue_head_incr(oldsd);
 	}
-	while ((skb = __skb_dequeue(&oldsd->input_pkt_queue))) {
+	while ((skb = skb_dequeue(&oldsd->input_pkt_queue))) {
 		netif_rx(skb);
 		input_queue_head_incr(oldsd);
 	}
@@ -6469,8 +6509,6 @@ static void __net_exit default_device_exit(struct net *net)
 
 		/* Push remaining network devices to init_net */
 		snprintf(fb_name, IFNAMSIZ, "dev%d", dev->ifindex);
-		if (__dev_get_by_name(&init_net, fb_name))
-			snprintf(fb_name, IFNAMSIZ, "dev%%d");
 		err = dev_change_net_namespace(dev, &init_net, fb_name);
 		if (err) {
 			pr_emerg("%s: failed to move %s to init_net: %d\n",

@@ -248,7 +248,6 @@ int rtnl_unregister(int protocol, int msgtype)
 
 	rtnl_msg_handlers[protocol][msgindex].doit = NULL;
 	rtnl_msg_handlers[protocol][msgindex].dumpit = NULL;
-	rtnl_msg_handlers[protocol][msgindex].calcit = NULL;
 
 	return 0;
 }
@@ -495,8 +494,10 @@ static int rtnl_link_fill(struct sk_buff *skb, const struct net_device *dev)
 	}
 	if (ops->fill_info) {
 		data = nla_nest_start(skb, IFLA_INFO_DATA);
-		if (data == NULL)
+		if (data == NULL) {
+			err = -EMSGSIZE;
 			goto err_cancel_link;
+		}
 		err = ops->fill_info(skb, dev);
 		if (err < 0)
 			goto err_cancel_data;
@@ -924,6 +925,7 @@ static int rtnl_fill_ifinfo(struct sk_buff *skb, struct net_device *dev,
 
 	if (1) {
 		struct rtnl_link_ifmap map;
+
 		memset(&map, 0, sizeof(map));
 		map.mem_start   = dev->mem_start;
 		map.mem_end     = dev->mem_end;
@@ -931,6 +933,7 @@ static int rtnl_fill_ifinfo(struct sk_buff *skb, struct net_device *dev,
 		map.irq         = dev->irq;
 		map.dma         = dev->dma;
 		map.port        = dev->if_port;
+
 		NLA_PUT(skb, IFLA_MAP, sizeof(map), &map);
 	}
 
@@ -1220,8 +1223,6 @@ static int do_setvfinfo(struct net_device *dev, struct nlattr **tb)
 
 	if (tb[IFLA_VF_MAC]) {
 		struct ifla_vf_mac *ivm = nla_data(tb[IFLA_VF_MAC]);
-		if (ivm->vf >= INT_MAX)
-			return -EINVAL;
 		err = -EOPNOTSUPP;
 		if (ops->ndo_set_vf_mac)
 			err = ops->ndo_set_vf_mac(dev, ivm->vf,
@@ -1232,8 +1233,7 @@ static int do_setvfinfo(struct net_device *dev, struct nlattr **tb)
 
 	if (tb[IFLA_VF_VLAN]) {
 		struct ifla_vf_vlan *ivv = nla_data(tb[IFLA_VF_VLAN]);
-		if (ivv->vf >= INT_MAX)
-			return -EINVAL;
+
 		err = -EOPNOTSUPP;
 		if (ops->ndo_set_vf_vlan)
 			err = ops->ndo_set_vf_vlan(dev, ivv->vf, ivv->vlan,
@@ -1244,9 +1244,7 @@ static int do_setvfinfo(struct net_device *dev, struct nlattr **tb)
 
 	if (tb[IFLA_VF_TX_RATE]) {
 		struct ifla_vf_tx_rate *ivt = nla_data(tb[IFLA_VF_TX_RATE]);
-		if (ivt->vf >= INT_MAX)
-			return -EINVAL;
-		err = -EOPNOTSUPP;
+
 		if (ops->ndo_set_vf_tx_rate)
 			err = ops->ndo_set_vf_tx_rate(dev, ivt->vf,
 						      ivt->rate);
@@ -1256,8 +1254,7 @@ static int do_setvfinfo(struct net_device *dev, struct nlattr **tb)
 
 	if (tb[IFLA_VF_SPOOFCHK]) {
 		struct ifla_vf_spoofchk *ivs = nla_data(tb[IFLA_VF_SPOOFCHK]);
-		if (ivs->vf >= INT_MAX)
-			return -EINVAL;
+
 		err = -EOPNOTSUPP;
 		if (ops->ndo_set_vf_spoofchk)
 			err = ops->ndo_set_vf_spoofchk(dev, ivs->vf,

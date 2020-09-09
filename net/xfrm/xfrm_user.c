@@ -113,8 +113,7 @@ static inline int verify_sec_ctx_len(struct nlattr **attrs)
 		return 0;
 
 	uctx = nla_data(rt);
-	if (uctx->len > nla_len(rt) ||
-	    uctx->len != (sizeof(struct xfrm_user_sec_ctx) + uctx->ctx_len))
+	if (uctx->len != (sizeof(struct xfrm_user_sec_ctx) + uctx->ctx_len))
 		return -EINVAL;
 
 	return 0;
@@ -391,7 +390,11 @@ static inline int xfrm_replay_verify_len(struct xfrm_replay_state_esn *replay_es
 	up = nla_data(rp);
 	ulen = xfrm_replay_state_esn_len(up);
 
-	if (nla_len(rp) < ulen || xfrm_replay_state_esn_len(replay_esn) != ulen)
+	/* Check the overall length and the internal bitmap length to avoid
+	 * potential overflow. */
+	if (nla_len(rp) < ulen ||
+	    xfrm_replay_state_esn_len(replay_esn) != ulen ||
+	    replay_esn->bmp_len != up->bmp_len)
 		return -EINVAL;
 
 	if (up->replay_window > up->bmp_len * sizeof(__u32) * 8)
@@ -1162,8 +1165,6 @@ static int verify_policy_type(u8 type)
 
 static int verify_newpolicy_info(struct xfrm_userpolicy_info *p)
 {
-	int ret;
-
 	switch (p->share) {
 	case XFRM_SHARE_ANY:
 	case XFRM_SHARE_SESSION:
@@ -1199,13 +1200,7 @@ static int verify_newpolicy_info(struct xfrm_userpolicy_info *p)
 		return -EINVAL;
 	}
 
-	ret = verify_policy_dir(p->dir);
-	if (ret)
-		return ret;
-	if (p->index && (xfrm_policy_id2dir(p->index) != p->dir))
-		return -EINVAL;
-
-	return 0;
+	return verify_policy_dir(p->dir);
 }
 
 static int copy_from_user_sec_ctx(struct xfrm_policy *pol, struct nlattr **attrs)
@@ -1262,9 +1257,6 @@ static int validate_tmpl(int nr, struct xfrm_user_tmpl *ut, u16 family)
 		 */
 		if (!ut[i].family)
 			ut[i].family = family;
-
-		if (ut[i].mode >= XFRM_MODE_MAX)
-			return -EINVAL;
 
 		switch (ut[i].family) {
 		case AF_INET:
@@ -2011,9 +2003,6 @@ static int xfrm_add_acquire(struct sk_buff *skb, struct nlmsghdr *nlh,
 	xfrm_mark_get(attrs, &mark);
 
 	err = verify_newpolicy_info(&ua->policy);
-	if (err)
-		goto free_state;
-	err = verify_sec_ctx_len(attrs);
 	if (err)
 		goto bad_policy;
 

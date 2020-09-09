@@ -109,6 +109,7 @@
 #include <net/rtnetlink.h>
 #ifdef CONFIG_SYSCTL
 #include <linux/sysctl.h>
+#include <linux/kmemleak.h>
 #endif
 #include <net/secure_seq.h>
 
@@ -2088,17 +2089,17 @@ static int ip_route_input_mc(struct sk_buff *skb, __be32 daddr, __be32 saddr,
 	rth->rt_flags	= RTCF_MULTICAST;
 	rth->rt_type	= RTN_MULTICAST;
 	rth->rt_key_tos	= tos;
-	rth->rt_dst		= daddr;
-	rth->rt_src		= saddr;
+	rth->rt_dst	= daddr;
+	rth->rt_src	= saddr;
 	rth->rt_route_iif = dev->ifindex;
-	rth->rt_iif		= dev->ifindex;
-	rth->rt_oif		= 0;
+	rth->rt_iif	= dev->ifindex;
+	rth->rt_oif	= 0;
 	rth->rt_mark    = skb->mark;
 	rth->rt_gateway	= daddr;
 	rth->rt_spec_dst= spec_dst;
 	rth->rt_peer_genid = 0;
-	rth->peer 		= NULL;
-	rth->fi 		= NULL;
+	rth->peer = NULL;
+	rth->fi = NULL;
 	if (our) {
 		rth->dst.input= ip_local_deliver;
 		rth->rt_flags |= RTCF_LOCAL;
@@ -2214,12 +2215,12 @@ static int __mkroute_input(struct sk_buff *skb,
 
 	rth->rt_key_dst	= daddr;
 	rth->rt_key_src	= saddr;
-	rth->rt_genid 	= rt_genid(dev_net(rth->dst.dev));
-	rth->rt_flags 	= flags;
-	rth->rt_type 	= res->type;
+	rth->rt_genid = rt_genid(dev_net(rth->dst.dev));
+	rth->rt_flags = flags;
+	rth->rt_type = res->type;
 	rth->rt_key_tos	= tos;
-	rth->rt_dst		= daddr;
-	rth->rt_src		= saddr;
+	rth->rt_dst	= daddr;
+	rth->rt_src	= saddr;
 	rth->rt_route_iif = in_dev->dev->ifindex;
 	rth->rt_iif 	= in_dev->dev->ifindex;
 	rth->rt_oif 	= 0;
@@ -2227,8 +2228,8 @@ static int __mkroute_input(struct sk_buff *skb,
 	rth->rt_gateway	= daddr;
 	rth->rt_spec_dst= spec_dst;
 	rth->rt_peer_genid = 0;
-	rth->peer 		= NULL;
-	rth->fi 		= NULL;
+	rth->peer = NULL;
+	rth->fi = NULL;
 
 	rth->dst.input = ip_forward;
 	rth->dst.output = ip_output;
@@ -2394,24 +2395,24 @@ local_input:
 
 	rth->rt_key_dst	= daddr;
 	rth->rt_key_src	= saddr;
-	rth->rt_genid 	= rt_genid(net);
+	rth->rt_genid = rt_genid(net);
 	rth->rt_flags 	= flags|RTCF_LOCAL;
 	rth->rt_type	= res.type;
 	rth->rt_key_tos	= tos;
-	rth->rt_dst		= daddr;
-	rth->rt_src		= saddr;
+	rth->rt_dst	= daddr;
+	rth->rt_src	= saddr;
 #ifdef CONFIG_IP_ROUTE_CLASSID
 	rth->dst.tclassid = itag;
 #endif
 	rth->rt_route_iif = dev->ifindex;
-	rth->rt_iif		= dev->ifindex;
-	rth->rt_oif		= 0;
+	rth->rt_iif	= dev->ifindex;
+	rth->rt_oif	= 0;
 	rth->rt_mark    = skb->mark;
 	rth->rt_gateway	= daddr;
 	rth->rt_spec_dst= spec_dst;
 	rth->rt_peer_genid = 0;
-	rth->peer 		= NULL;
-	rth->fi 		= NULL;
+	rth->peer = NULL;
+	rth->fi = NULL;
 	if (res.type == RTN_UNREACHABLE) {
 		rth->dst.input= ip_error;
 		rth->dst.error= -err;
@@ -2601,21 +2602,21 @@ static struct rtable *__mkroute_output(const struct fib_result *res,
 
 	rth->rt_key_dst	= orig_daddr;
 	rth->rt_key_src	= orig_saddr;
-	rth->rt_genid 	= rt_genid(dev_net(dev_out));
+	rth->rt_genid = rt_genid(dev_net(dev_out));
 	rth->rt_flags	= flags;
 	rth->rt_type	= type;
 	rth->rt_key_tos	= orig_rtos;
-	rth->rt_dst		= fl4->daddr;
-	rth->rt_src		= fl4->saddr;
+	rth->rt_dst	= fl4->daddr;
+	rth->rt_src	= fl4->saddr;
 	rth->rt_route_iif = 0;
-	rth->rt_iif		= orig_oif ? : dev_out->ifindex;
-	rth->rt_oif		= orig_oif;
+	rth->rt_iif	= orig_oif ? : dev_out->ifindex;
+	rth->rt_oif	= orig_oif;
 	rth->rt_mark    = fl4->flowi4_mark;
 	rth->rt_gateway = fl4->daddr;
 	rth->rt_spec_dst= fl4->saddr;
 	rth->rt_peer_genid = 0;
-	rth->peer 		= NULL;
-	rth->fi 		= NULL;
+	rth->peer = NULL;
+	rth->fi = NULL;
 
 	RT_CACHE_STAT_INC(out_slow_tot);
 
@@ -2678,14 +2679,11 @@ static struct rtable *ip_route_output_slow(struct net *net, struct flowi4 *fl4)
 
 	rcu_read_lock();
 	if (fl4->saddr) {
+		rth = ERR_PTR(-EINVAL);
 		if (ipv4_is_multicast(fl4->saddr) ||
 		    ipv4_is_lbcast(fl4->saddr) ||
-		    ipv4_is_zeronet(fl4->saddr)) {
-			rth = ERR_PTR(-EINVAL);
+		    ipv4_is_zeronet(fl4->saddr))
 			goto out;
-		}
-
-		rth = ERR_PTR(-ENETUNREACH);
 
 		/* I removed check for oif == dev_out->oif here.
 		   It was wrong for two reasons:

@@ -84,6 +84,7 @@ static int hidp_sock_ioctl(struct socket *sock, unsigned int cmd, unsigned long 
 			sockfd_put(csock);
 			return err;
 		}
+		ca.name[sizeof(ca.name)-1] = 0;
 
 		if (csock->sk->sk_state != BT_CONNECTED ||
 				isock->sk->sk_state != BT_CONNECTED) {
@@ -91,8 +92,6 @@ static int hidp_sock_ioctl(struct socket *sock, unsigned int cmd, unsigned long 
 			sockfd_put(isock);
 			return -EBADFD;
 		}
-
-                ca.name[sizeof(ca.name)-1] = 0;
 
 		err = hidp_add_connection(&ca, csock, isock);
 		if (!err) {
@@ -162,10 +161,10 @@ static int hidp_sock_compat_ioctl(struct socket *sock, unsigned int cmd, unsigne
 {
 	if (cmd == HIDPGETCONNLIST) {
 		struct hidp_connlist_req cl;
-		u32 uci;
+		uint32_t uci;
 		int err;
 
-		if (get_user(cl.cnum, (u32 __user *) arg) ||
+		if (get_user(cl.cnum, (uint32_t __user *) arg) ||
 				get_user(uci, (u32 __user *) (arg + 4)))
 			return -EFAULT;
 
@@ -176,7 +175,7 @@ static int hidp_sock_compat_ioctl(struct socket *sock, unsigned int cmd, unsigne
 
 		err = hidp_get_connlist(&cl);
 
-		if (!err && put_user(cl.cnum, (u32 __user *) arg))
+		if (!err && put_user(cl.cnum, (uint32_t __user *) arg))
 			err = -EFAULT;
 
 		return err;

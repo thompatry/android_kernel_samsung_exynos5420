@@ -162,15 +162,15 @@ struct flowi {
 		struct flowi6		ip6;
 		struct flowidn		dn;
 	} u;
-#define flowi_oif		u.__fl_common.flowic_oif
-#define flowi_iif		u.__fl_common.flowic_iif
-#define flowi_mark		u.__fl_common.flowic_mark
-#define flowi_tos		u.__fl_common.flowic_tos
-#define flowi_scope		u.__fl_common.flowic_scope
-#define flowi_proto		u.__fl_common.flowic_proto
-#define flowi_flags		u.__fl_common.flowic_flags
-#define flowi_secid		u.__fl_common.flowic_secid
-#define flowi_uid	        u.__fl_common.flowic_uid
+#define flowi_oif	u.__fl_common.flowic_oif
+#define flowi_iif	u.__fl_common.flowic_iif
+#define flowi_mark	u.__fl_common.flowic_mark
+#define flowi_tos	u.__fl_common.flowic_tos
+#define flowi_scope	u.__fl_common.flowic_scope
+#define flowi_proto	u.__fl_common.flowic_proto
+#define flowi_flags	u.__fl_common.flowic_flags
+#define flowi_secid	u.__fl_common.flowic_secid
+#define flowi_uid	u.__fl_common.flowic_uid
 } __attribute__((__aligned__(BITS_PER_LONG/8)));
 
 static inline struct flowi *flowi4_to_flowi(struct flowi4 *fl4)

@@ -42,6 +42,8 @@
 #define WFE(cond)	ALT_SMP("wfe" cond, "nop")
 #endif
 
+#define WFE_SAFE(fixup, tmp)	"	wfe\n"
+
 static inline void dsb_sev(void)
 {
 #if __LINUX_ARM_ARCH__ >= 7
