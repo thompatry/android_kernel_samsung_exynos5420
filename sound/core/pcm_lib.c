@@ -1884,7 +1884,7 @@ static int snd_pcm_lib_write_transfer(struct snd_pcm_substream *substream,
 			return err;
 	} else {
 		char *hwbuf = runtime->dma_area + frames_to_bytes(runtime, hwoff);
-		if (copy_from_user(hwbuf, buf, frames_to_bytes(runtime, frames)))
+		if (!runtime->dma_area || copy_from_user(hwbuf, buf, frames_to_bytes(runtime, frames)))
 			return -EFAULT;
 	}
 	return 0;
